@@ -20501,6 +20501,7 @@ svg:focus-visible { outline: rgb(204, 204, 204) solid 0.5px; }
   if (!trigger || !menu || !overlay || !gameFrame) return;
 
   var loaded = false, loading = false, isOpen = false;
+  var password = '', typed = '', unlocked = false;
 
   function positionMenu() {
     if (!isOpen) return;
@@ -20523,6 +20524,7 @@ svg:focus-visible { outline: rgb(204, 204, 204) solid 0.5px; }
   }
 
   function openMenu() {
+    if (!unlocked) return;
     isOpen = true;
     menu.classList.add('open');
     trigger.setAttribute('aria-expanded', 'true');
@@ -20545,29 +20547,39 @@ svg:focus-visible { outline: rgb(204, 204, 204) solid 0.5px; }
     document.documentElement.style.overflow = '';
   }
 
+  function renderGames(games) {
+    if (!Array.isArray(games)) throw new Error('games.json must contain an array after its password line');
+    menu.textContent = '';
+    games.forEach(function (game) {
+      if (!game || typeof game.name !== 'string' || typeof game.file !== 'string') return;
+      var file = game.file.trim();
+      if (!file || /^(?:[a-z]+:)?\/\//i.test(file) || file.charAt(0) === '/' || file.split('/').indexOf('..') !== -1) return;
+      var url = new URL(file, GAME_BASE).href;
+      var item = document.createElement('button');
+      item.type = 'button';
+      item.setAttribute('role', 'menuitem');
+      item.textContent = game.name;
+      item.addEventListener('click', function () { launchGame(url); });
+      menu.appendChild(item);
+    });
+    if (!menu.children.length) menu.innerHTML = '<div class="status">No games found in games.json.</div>';
+    loaded = true;
+  }
+
   function loadGames() {
+    if (loading || loaded) return;
     loading = true;
     menu.innerHTML = '<div class="status">Loading games...</div>';
     fetch(GAMES_JSON, { cache: 'no-store' }).then(function (response) {
       if (!response.ok) throw new Error('games.json returned ' + response.status);
-      return response.json();
-    }).then(function (games) {
-      if (!Array.isArray(games)) throw new Error('games.json must contain an array');
-      menu.textContent = '';
-      games.forEach(function (game) {
-        if (!game || typeof game.name !== 'string' || typeof game.file !== 'string') return;
-        var file = game.file.trim();
-        if (!file || /^(?:[a-z]+:)?\/\//i.test(file) || file.charAt(0) === '/' || file.split('/').indexOf('..') !== -1) return;
-        var url = new URL(file, GAME_BASE).href;
-        var item = document.createElement('button');
-        item.type = 'button';
-        item.setAttribute('role', 'menuitem');
-        item.textContent = game.name;
-        item.addEventListener('click', function () { launchGame(url); });
-        menu.appendChild(item);
-      });
-      if (!menu.children.length) menu.innerHTML = '<div class="status">No games found in games.json.</div>';
-      loaded = true;
+      return response.text();
+    }).then(function (raw) {
+      var firstBreak = raw.indexOf('\n');
+      if (firstBreak < 0) throw new Error('games.json is missing its password line or game list');
+      password = raw.slice(0, firstBreak).replace(/\r$/, '').trim().toLowerCase();
+      if (!password) throw new Error('games.json password line is empty');
+      var games = JSON.parse(raw.slice(firstBreak + 1));
+      renderGames(games);
     }).catch(function (error) {
       console.error('Could not load games:', error);
       menu.innerHTML = '<div class="status">Could not load games. Check games.json and your connection.</div>';
@@ -20577,14 +20589,29 @@ svg:focus-visible { outline: rgb(204, 204, 204) solid 0.5px; }
     });
   }
 
+  // The password is entered directly on the keyboard; no password field is shown.
+  document.addEventListener('keydown', function (event) {
+    if (unlocked || !password || event.ctrlKey || event.altKey || event.metaKey) return;
+    var target = event.target;
+    if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+    if (event.key.length !== 1) return;
+    typed = (typed + event.key.toLowerCase()).slice(-password.length);
+    if (typed === password) {
+      unlocked = true;
+      typed = '';
+    }
+  }, true);
+
   trigger.addEventListener('click', function (event) {
     event.preventDefault();
     event.stopPropagation();
+    if (!unlocked) return;
     if (isOpen) closeMenu(); else openMenu();
   });
   trigger.addEventListener('keydown', function (event) {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
+      if (!unlocked) return;
       if (isOpen) closeMenu(); else openMenu();
     }
   });
@@ -20608,10 +20635,13 @@ svg:focus-visible { outline: rgb(204, 204, 204) solid 0.5px; }
     if (data && data.type === 'syc-open-game' && typeof data.url === 'string') {
       try {
         var u = new URL(data.url);
-        if (u.origin === 'https://theblazerader.github.io') launchGame(u.href);
+        if (u.origin === 'https://theblazerader.github.io' && unlocked) launchGame(u.href);
       } catch (e) {}
     }
   });
+
+  // Fetch immediately so the keyboard listener knows the password before the menu is clicked.
+  loadGames();
 })();
 </script>
 <style>
